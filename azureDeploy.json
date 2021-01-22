@@ -1,0 +1,1674 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "workflow_name_disks": {
+            "defaultValue": "ans-unattached-disks-management-automation-la",
+            "type": "String"
+        },
+        "workflow_name_pips": {
+            "defaultValue": "ans-pip-management-automation-la",
+            "type": "String"
+        },
+        "workflow_name_snapshot": {
+            "defaultValue": "ans-zombie-snapshot-management-automation-la",
+            "type": "String"
+        },
+        "workflow_location": {
+            "defaultValue": "uksouth",
+            "type": "String"
+        },
+        "tags_criticality": {
+            "defaultValue": "Tier 1",
+            "type": "string"
+        },
+        "tags_owner": {
+            "defaultValue": "Your Team",
+            "type": "string"
+        },
+        "workflow_approval_email": {
+            "defaultValue": "cto-office@ans.co.uk",
+            "type": "String"
+        }
+    },
+    "variables": {
+        "office365_api_name": "office365connection",
+        "recurrence_starttime": "2049-12-01T00:00:00Z"
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Web/connections",
+            "name": "[variables('office365_api_name')]",
+            "apiVersion": "2016-06-01",
+            "location": "[parameters('workflow_location')]",
+            "scale": null,
+            "properties": {
+                "displayName": "office365-email",
+                "customParameterValues": {},
+                "api": {
+                    "id": "[concat('/subscriptions/',subscription().subscriptionId,'/providers/Microsoft.Web/locations/' ,parameters('workflow_location'),'/managedApis/office365')]"
+                },
+                "parameterValues": {
+                    "token": "dummytoken"
+                }
+            },
+            "tags": {
+                "Application": "O365 Connector Management Automation",
+                "Criticality": "[parameters('tags_criticality')]",
+                "Owner": "[parameters('tags_owner')]",
+                "deployedBy": "ARM"
+            }
+        },
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('workflow_name_disks')]",
+            "location": "[parameters('workflow_location')]",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', variables('office365_api_name'))]"
+            ],
+            "properties": {
+                "state": "Enabled",
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "office365": {
+                                "connectionId": "[concat(resourceGroup().id,'/providers/Microsoft.Web/connections/',variables('office365_api_name'))]",
+                                "connectionName": "[variables('office365_api_name')]",
+                                "id": "[concat('/subscriptions/',subscription().subscriptionId,'/providers/Microsoft.Web/locations/' ,parameters('workflow_location'),'/managedApis/office365')]"
+                            }
+                        }
+                    }
+                },
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "contentVersion": "1.0.0.0",
+                    "triggers": {
+                        "Recurrence": {
+                            "recurrence": {
+                                "frequency": "Month",
+                                "interval": 1,
+                                "startTime": "[variables('recurrence_starttime')]",
+                                "timeZone": "UTC"
+                            },
+                            "type": "Recurrence"
+                        }
+                    },
+                    "actions": {
+                        "Array_of_Disk_Ids": {
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "disks",
+                                        "type": "array"
+                                    }
+                                ]
+                            },
+                            "runAfter": {},
+                            "type": "InitializeVariable"
+                        },
+                        "Check_Array_of_Disk_Ids_is_greater_than_0": {
+                            "actions": {
+                                "Condition_approval": {
+                                    "actions": {
+                                        "For_each": {
+                                            "actions": {
+                                                "Delete_Disk": {
+                                                    "inputs": {
+                                                        "authentication": {
+                                                            "audience": "https://management.azure.com",
+                                                            "type": "ManagedServiceIdentity"
+                                                        },
+                                                        "method": "DELETE",
+                                                        "queries": {
+                                                            "api-version": "2020-06-30"
+                                                        },
+                                                        "uri": "https://management.azure.com@{body('Parse_JSON')?['id']}"
+                                                    },
+                                                    "runAfter": {
+                                                        "Parse_JSON": [
+                                                            "Succeeded"
+                                                        ]
+                                                    },
+                                                    "type": "Http"
+                                                },
+                                                "Parse_JSON": {
+                                                    "inputs": {
+                                                        "content": "@items('For_each')",
+                                                        "schema": {
+                                                            "properties": {
+                                                                "id": {
+                                                                    "type": "string"
+                                                                },
+                                                                "location": {
+                                                                    "type": "string"
+                                                                },
+                                                                "name": {
+                                                                    "type": "string"
+                                                                },
+                                                                "type": {
+                                                                    "type": "string"
+                                                                }
+                                                            },
+                                                            "type": "object"
+                                                        }
+                                                    },
+                                                    "runAfter": {},
+                                                    "type": "ParseJson"
+                                                }
+                                            },
+                                            "foreach": "@variables('disks')",
+                                            "runAfter": {},
+                                            "type": "Foreach"
+                                        }
+                                    },
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "equals": [
+                                                    "@body('Send_approval_email')?['SelectedOption']",
+                                                    "Approve"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "runAfter": {
+                                        "Send_approval_email": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "If"
+                                },
+                                "Create_HTML_table_of_Disk_IDs": {
+                                    "inputs": {
+                                        "columns": [
+                                            {
+                                                "header": "Name",
+                                                "value": "@item()?['name']"
+                                            },
+                                            {
+                                                "header": "SizeGB",
+                                                "value": "@item()?['properties']?['diskSizeGB']"
+                                            },
+                                            {
+                                                "header": "Location",
+                                                "value": "@item()?['location']"
+                                            },
+                                            {
+                                                "header": "Tags",
+                                                "value": "@item()?['tags']"
+                                            }
+                                        ],
+                                        "format": "HTML",
+                                        "from": "@variables('disks')"
+                                    },
+                                    "runAfter": {},
+                                    "type": "Table"
+                                },
+                                "Send_approval_email": {
+                                    "inputs": {
+                                        "body": {
+                                            "Message": {
+                                                "Body": "@body('Create_HTML_table_of_Disk_IDs')",
+                                                "HeaderText": "Delete Unattached Disks Request",
+                                                "HideHTMLMessage": false,
+                                                "Importance": "High",
+                                                "Options": "Approve, Reject",
+                                                "SelectionText": "Please review the list of unattached disks and either Approve or Reject their deletion.",
+                                                "ShowHTMLConfirmationDialog": false,
+                                                "Subject": "Approval Request",
+                                                "To": "[parameters('workflow_approval_email')]",
+                                                "UseOnlyHTMLMessage": true
+                                            },
+                                            "NotificationUrl": "@{listCallbackUrl()}"
+                                        },
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['office365']['connectionId']"
+                                            }
+                                        },
+                                        "path": "/approvalmail/$subscriptions"
+                                    },
+                                    "runAfter": {
+                                        "Create_HTML_table_of_Disk_IDs": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ApiConnectionWebhook"
+                                }
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "greater": [
+                                            "@length(variables('disks'))\n",
+                                            0
+                                        ]
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "For_each_Subscription": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "For_each_Subscription": {
+                            "actions": {
+                                "For_each_Disk": {
+                                    "actions": {
+                                        "Condition_is_Unattached": {
+                                            "actions": {
+                                                "Append_to_array_of_Disks_variable": {
+                                                    "inputs": {
+                                                        "name": "disks",
+                                                        "value": "@items('For_each_Disk')"
+                                                    },
+                                                    "runAfter": {},
+                                                    "type": "AppendToArrayVariable"
+                                                }
+                                            },
+                                            "expression": {
+                                                "and": [
+                                                    {
+                                                        "equals": [
+                                                            "@items('For_each_Disk')?['properties']?['diskState']",
+                                                            "Unattached"
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            "runAfter": {},
+                                            "type": "If"
+                                        }
+                                    },
+                                    "foreach": "@body('Parse_Disks_JSON')?['value']",
+                                    "runAfter": {
+                                        "Parse_Disks_JSON": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Foreach"
+                                },
+                                "Get_Disks": {
+                                    "inputs": {
+                                        "authentication": {
+                                            "audience": "https://management.azure.com",
+                                            "type": "ManagedServiceIdentity"
+                                        },
+                                        "method": "GET",
+                                        "queries": {
+                                            "api-version": "2020-06-30"
+                                        },
+                                        "uri": "https://management.azure.com/subscriptions/@{items('For_each_Subscription')?['subscriptionId']}/providers/Microsoft.Compute/disks"
+                                    },
+                                    "runAfter": {},
+                                    "type": "Http"
+                                },
+                                "Parse_Disks_JSON": {
+                                    "inputs": {
+                                        "content": "@body('Get_Disks')",
+                                        "schema": {
+                                            "properties": {
+                                                "value": {
+                                                    "items": {
+                                                        "properties": {
+                                                            "id": {
+                                                                "type": "string"
+                                                            },
+                                                            "location": {
+                                                                "type": "string"
+                                                            },
+                                                            "managedBy": {
+                                                                "type": "string"
+                                                            },
+                                                            "name": {
+                                                                "type": "string"
+                                                            },
+                                                            "properties": {
+                                                                "properties": {
+                                                                    "creationData": {
+                                                                        "properties": {
+                                                                            "createOption": {
+                                                                                "type": "string"
+                                                                            }
+                                                                        },
+                                                                        "type": "object"
+                                                                    },
+                                                                    "diskIOPSReadWrite": {
+                                                                        "type": "integer"
+                                                                    },
+                                                                    "diskMBpsReadWrite": {
+                                                                        "type": "integer"
+                                                                    },
+                                                                    "diskSizeBytes": {
+                                                                        "type": "integer"
+                                                                    },
+                                                                    "diskSizeGB": {
+                                                                        "type": "integer"
+                                                                    },
+                                                                    "diskState": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "encryption": {
+                                                                        "properties": {
+                                                                            "type": {
+                                                                                "type": "string"
+                                                                            }
+                                                                        },
+                                                                        "type": "object"
+                                                                    },
+                                                                    "networkAccessPolicy": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "provisioningState": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "timeCreated": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "uniqueId": {
+                                                                        "type": "string"
+                                                                    }
+                                                                },
+                                                                "type": "object"
+                                                            },
+                                                            "sku": {
+                                                                "properties": {
+                                                                    "name": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "tier": {
+                                                                        "type": "string"
+                                                                    }
+                                                                },
+                                                                "type": "object"
+                                                            },
+                                                            "tags": {
+                                                                "properties": {
+                                                                    "department": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "owner": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "project": {
+                                                                        "type": "string"
+                                                                    }
+                                                                },
+                                                                "type": "object"
+                                                            },
+                                                            "type": {
+                                                                "type": "string"
+                                                            }
+                                                        },
+                                                        "required": [
+                                                            "name",
+                                                            "id",
+                                                            "type",
+                                                            "location",
+                                                            "sku",
+                                                            "properties"
+                                                        ],
+                                                        "type": "object"
+                                                    },
+                                                    "type": "array"
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Get_Disks": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ParseJson"
+                                }
+                            },
+                            "foreach": "@body('Parse_Subscription_JSON')?['value']",
+                            "runAfter": {
+                                "Parse_Subscription_JSON": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "Get_Subscriptions": {
+                            "inputs": {
+                                "authentication": {
+                                    "audience": "https://management.azure.com",
+                                    "type": "ManagedServiceIdentity"
+                                },
+                                "method": "GET",
+                                "queries": {
+                                    "api-version": "2020-01-01"
+                                },
+                                "uri": "https://management.azure.com/subscriptions"
+                            },
+                            "runAfter": {
+                                "Array_of_Disk_Ids": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Http"
+                        },
+                        "Parse_Subscription_JSON": {
+                            "inputs": {
+                                "content": "@body('Get_Subscriptions')",
+                                "schema": {
+                                    "properties": {
+                                        "count": {
+                                            "properties": {
+                                                "type": {
+                                                    "type": "string"
+                                                },
+                                                "value": {
+                                                    "type": "integer"
+                                                }
+                                            },
+                                            "type": "object"
+                                        },
+                                        "value": {
+                                            "items": {
+                                                "properties": {
+                                                    "authorizationSource": {
+                                                        "type": "string"
+                                                    },
+                                                    "displayName": {
+                                                        "type": "string"
+                                                    },
+                                                    "id": {
+                                                        "type": "string"
+                                                    },
+                                                    "managedByTenants": {
+                                                        "type": "array"
+                                                    },
+                                                    "state": {
+                                                        "type": "string"
+                                                    },
+                                                    "subscriptionId": {
+                                                        "type": "string"
+                                                    },
+                                                    "subscriptionPolicies": {
+                                                        "properties": {
+                                                            "locationPlacementId": {
+                                                                "type": "string"
+                                                            },
+                                                            "quotaId": {
+                                                                "type": "string"
+                                                            },
+                                                            "spendingLimit": {
+                                                                "type": "string"
+                                                            }
+                                                        },
+                                                        "type": "object"
+                                                    },
+                                                    "tenantId": {
+                                                        "type": "string"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "id",
+                                                    "authorizationSource",
+                                                    "managedByTenants",
+                                                    "subscriptionId",
+                                                    "tenantId",
+                                                    "displayName",
+                                                    "state",
+                                                    "subscriptionPolicies"
+                                                ],
+                                                "type": "object"
+                                            },
+                                            "type": "array"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            },
+                            "runAfter": {
+                                "Get_Subscriptions": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ParseJson"
+                        }
+                    },
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "outputs": {}
+                }
+            },
+            "tags": {
+                "Application": "Unattached Disks Management Automation",
+                "Criticality": "[parameters('tags_criticality')]",
+                "Owner": "[parameters('tags_owner')]",
+                "deployedBy": "ARM"
+            }
+        },
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('workflow_name_pips')]",
+            "location": "[parameters('workflow_location')]",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', variables('office365_api_name'))]"
+            ],
+            "properties": {
+                "state": "Enabled",
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "office365": {
+                                "connectionId": "[concat(resourceGroup().id,'/providers/Microsoft.Web/connections/',variables('office365_api_name'))]",
+                                "connectionName": "[variables('office365_api_name')]",
+                                "id": "[concat('/subscriptions/',subscription().subscriptionId,'/providers/Microsoft.Web/locations/' ,parameters('workflow_location'),'/managedApis/office365')]"
+                            }
+                        }
+                    }
+                },
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "actions": {
+                        "Array_of_Public_IPs": {
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "pips",
+                                        "type": "array"
+                                    }
+                                ]
+                            },
+                            "runAfter": {},
+                            "type": "InitializeVariable"
+                        },
+                        "Check_Array_of_Public_IPs_is_greater_than_0": {
+                            "actions": {
+                                "Condition_approval": {
+                                    "actions": {
+                                        "For_each": {
+                                            "actions": {
+                                                "Delete_Public_IP_Address": {
+                                                    "inputs": {
+                                                        "authentication": {
+                                                            "audience": "https://management.azure.com",
+                                                            "type": "ManagedServiceIdentity"
+                                                        },
+                                                        "method": "DELETE",
+                                                        "queries": {
+                                                            "api-version": "2020-07-01"
+                                                        },
+                                                        "uri": "https://management.azure.com@{body('Parse_JSON')['id']}"
+                                                    },
+                                                    "runAfter": {
+                                                        "Parse_JSON": [
+                                                            "Succeeded"
+                                                        ]
+                                                    },
+                                                    "type": "Http"
+                                                },
+                                                "Parse_JSON": {
+                                                    "inputs": {
+                                                        "content": "@items('For_each')",
+                                                        "schema": {
+                                                            "properties": {
+                                                                "etag": {
+                                                                    "type": "string"
+                                                                },
+                                                                "id": {
+                                                                    "type": "string"
+                                                                },
+                                                                "location": {
+                                                                    "type": "string"
+                                                                },
+                                                                "name": {
+                                                                    "type": "string"
+                                                                },
+                                                                "properties": {
+                                                                    "properties": {
+                                                                        "idleTimeoutInMinutes": {
+                                                                            "type": "integer"
+                                                                        },
+                                                                        "ipConfiguration": {
+                                                                            "properties": {
+                                                                                "id": {
+                                                                                    "type": "string"
+                                                                                }
+                                                                            },
+                                                                            "type": "object"
+                                                                        },
+                                                                        "ipTags": {
+                                                                            "type": "array"
+                                                                        },
+                                                                        "provisioningState": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "publicIPAddressVersion": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "publicIPAllocationMethod": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "resourceGuid": {
+                                                                            "type": "string"
+                                                                        }
+                                                                    },
+                                                                    "type": "object"
+                                                                },
+                                                                "sku": {
+                                                                    "properties": {
+                                                                        "name": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "tier": {
+                                                                            "type": "string"
+                                                                        }
+                                                                    },
+                                                                    "type": "object"
+                                                                },
+                                                                "tags": {
+                                                                    "type": "object"
+                                                                },
+                                                                "type": {
+                                                                    "type": "string"
+                                                                }
+                                                            },
+                                                            "required": [
+                                                                "name",
+                                                                "id",
+                                                                "location",
+                                                                "properties",
+                                                                "type",
+                                                                "sku"
+                                                            ],
+                                                            "type": "object"
+                                                        }
+                                                    },
+                                                    "runAfter": {},
+                                                    "type": "ParseJson"
+                                                }
+                                            },
+                                            "foreach": "@variables('pips')",
+                                            "runAfter": {},
+                                            "type": "Foreach"
+                                        }
+                                    },
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "equals": [
+                                                    "@body('Send_approval_email')?['SelectedOption']",
+                                                    "Approve"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "runAfter": {
+                                        "Send_approval_email": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "If"
+                                },
+                                "Create_HTML_table": {
+                                    "inputs": {
+                                        "columns": [
+                                            {
+                                                "header": "Name",
+                                                "value": "@item()?['name']"
+                                            },
+                                            {
+                                                "header": "IPAddress",
+                                                "value": "@item()?['properties']?['ipAddress']"
+                                            },
+                                            {
+                                                "header": "Location",
+                                                "value": "@item()?['location']"
+                                            },
+                                            {
+                                                "header": "Tags",
+                                                "value": "@item()?['tags']"
+                                            }
+                                        ],
+                                        "format": "HTML",
+                                        "from": "@variables('pips')"
+                                    },
+                                    "runAfter": {},
+                                    "type": "Table"
+                                },
+                                "Send_approval_email": {
+                                    "inputs": {
+                                        "body": {
+                                            "Message": {
+                                                "Body": "@body('Create_HTML_table')",
+                                                "HeaderText": "Delete Unattached Public IP Address Request",
+                                                "HideHTMLMessage": false,
+                                                "Importance": "High",
+                                                "Options": "Approve, Reject",
+                                                "SelectionText": "Please review the list of unattached Public IP addresses and either Approve or Reject their deletion.",
+                                                "ShowHTMLConfirmationDialog": false,
+                                                "Subject": "Approval Request",
+                                                "To": "[parameters('workflow_approval_email')]",
+                                                "UseOnlyHTMLMessage": true
+                                            },
+                                            "NotificationUrl": "@{listCallbackUrl()}"
+                                        },
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['office365']['connectionId']"
+                                            }
+                                        },
+                                        "path": "/approvalmail/$subscriptions"
+                                    },
+                                    "runAfter": {
+                                        "Create_HTML_table": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ApiConnectionWebhook"
+                                }
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "greater": [
+                                            "@length(variables('pips'))",
+                                            0
+                                        ]
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "For_each_subscription": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "For_each_subscription": {
+                            "actions": {
+                                "For_each_public_ip": {
+                                    "actions": {
+                                        "Condition_is_Unattached": {
+                                            "actions": {},
+                                            "else": {
+                                                "actions": {
+                                                    "Append_to_array_variable": {
+                                                        "inputs": {
+                                                            "name": "pips",
+                                                            "value": "@items('For_each_public_ip')"
+                                                        },
+                                                        "runAfter": {},
+                                                        "type": "AppendToArrayVariable"
+                                                    }
+                                                }
+                                            },
+                                            "expression": {
+                                                "and": [
+                                                    {
+                                                        "contains": [
+                                                            "@items('For_each_public_ip')?['properties']",
+                                                            "ipConfiguration"
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            "runAfter": {},
+                                            "type": "If"
+                                        }
+                                    },
+                                    "foreach": "@body('Parse_Public_IPs_JSON')?['value']",
+                                    "runAfter": {
+                                        "Parse_Public_IPs_JSON": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Foreach"
+                                },
+                                "Get_Public_IPs": {
+                                    "inputs": {
+                                        "authentication": {
+                                            "audience": "https://management.azure.com",
+                                            "type": "ManagedServiceIdentity"
+                                        },
+                                        "method": "GET",
+                                        "queries": {
+                                            "api-version": "2020-07-01"
+                                        },
+                                        "uri": "https://management.azure.com/subscriptions/@{items('For_each_subscription')?['subscriptionId']}/providers/Microsoft.Network/publicIPAddresses"
+                                    },
+                                    "runAfter": {},
+                                    "type": "Http"
+                                },
+                                "Parse_Public_IPs_JSON": {
+                                    "inputs": {
+                                        "content": "@body('Get_Public_IPs')",
+                                        "schema": {
+                                            "properties": {
+                                                "value": {
+                                                    "items": {
+                                                        "properties": {
+                                                            "etag": {
+                                                                "type": "string"
+                                                            },
+                                                            "id": {
+                                                                "type": "string"
+                                                            },
+                                                            "location": {
+                                                                "type": "string"
+                                                            },
+                                                            "name": {
+                                                                "type": "string"
+                                                            },
+                                                            "properties": {
+                                                                "properties": {
+                                                                    "idleTimeoutInMinutes": {
+                                                                        "type": "integer"
+                                                                    },
+                                                                    "ipConfiguration": {
+                                                                        "properties": {
+                                                                            "id": {
+                                                                                "type": "string"
+                                                                            }
+                                                                        },
+                                                                        "type": "object"
+                                                                    },
+                                                                    "ipTags": {
+                                                                        "type": "array"
+                                                                    },
+                                                                    "provisioningState": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "publicIPAddressVersion": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "publicIPAllocationMethod": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "resourceGuid": {
+                                                                        "type": "string"
+                                                                    }
+                                                                },
+                                                                "type": "object"
+                                                            },
+                                                            "sku": {
+                                                                "properties": {
+                                                                    "name": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "tier": {
+                                                                        "type": "string"
+                                                                    }
+                                                                },
+                                                                "type": "object"
+                                                            },
+                                                            "tags": {
+                                                                "type": "object"
+                                                            },
+                                                            "type": {
+                                                                "type": "string"
+                                                            }
+                                                        },
+                                                        "required": [
+                                                            "name",
+                                                            "id",
+                                                            "location",
+                                                            "properties",
+                                                            "type",
+                                                            "sku"
+                                                        ],
+                                                        "type": "object"
+                                                    },
+                                                    "type": "array"
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Get_Public_IPs": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ParseJson"
+                                }
+                            },
+                            "foreach": "@body('Parse_Subscription_JSON')?['value']",
+                            "runAfter": {
+                                "Parse_Subscription_JSON": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "Get_Subscriptions": {
+                            "inputs": {
+                                "authentication": {
+                                    "audience": "https://management.azure.com",
+                                    "type": "ManagedServiceIdentity"
+                                },
+                                "method": "GET",
+                                "queries": {
+                                    "api-version": "2020-01-01"
+                                },
+                                "uri": "https://management.azure.com/subscriptions"
+                            },
+                            "runAfter": {
+                                "Array_of_Public_IPs": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Http"
+                        },
+                        "Parse_Subscription_JSON": {
+                            "inputs": {
+                                "content": "@body('Get_Subscriptions')",
+                                "schema": {
+                                    "properties": {
+                                        "count": {
+                                            "properties": {
+                                                "type": {
+                                                    "type": "string"
+                                                },
+                                                "value": {
+                                                    "type": "integer"
+                                                }
+                                            },
+                                            "type": "object"
+                                        },
+                                        "value": {
+                                            "items": {
+                                                "properties": {
+                                                    "authorizationSource": {
+                                                        "type": "string"
+                                                    },
+                                                    "displayName": {
+                                                        "type": "string"
+                                                    },
+                                                    "id": {
+                                                        "type": "string"
+                                                    },
+                                                    "managedByTenants": {
+                                                        "type": "array"
+                                                    },
+                                                    "state": {
+                                                        "type": "string"
+                                                    },
+                                                    "subscriptionId": {
+                                                        "type": "string"
+                                                    },
+                                                    "subscriptionPolicies": {
+                                                        "properties": {
+                                                            "locationPlacementId": {
+                                                                "type": "string"
+                                                            },
+                                                            "quotaId": {
+                                                                "type": "string"
+                                                            },
+                                                            "spendingLimit": {
+                                                                "type": "string"
+                                                            }
+                                                        },
+                                                        "type": "object"
+                                                    },
+                                                    "tenantId": {
+                                                        "type": "string"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "id",
+                                                    "authorizationSource",
+                                                    "managedByTenants",
+                                                    "subscriptionId",
+                                                    "tenantId",
+                                                    "displayName",
+                                                    "state",
+                                                    "subscriptionPolicies"
+                                                ],
+                                                "type": "object"
+                                            },
+                                            "type": "array"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            },
+                            "runAfter": {
+                                "Get_Subscriptions": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ParseJson"
+                        }
+                    },
+                    "contentVersion": "1.0.0.0",
+                    "outputs": {},
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "Recurrence": {
+                            "recurrence": {
+                                "frequency": "Month",
+                                "interval": 1,
+                                "startTime": "[variables('recurrence_starttime')]",
+                                "timeZone": "UTC"
+                            },
+                            "type": "Recurrence"
+                        }
+                    }
+                }
+            },
+            "tags": {
+                "Application": "Public IP Management Automation",
+                "Criticality": "[parameters('tags_criticality')]",
+                "Owner": "[parameters('tags_owner')]",
+                "deployedBy": "ARM"
+            }
+        },
+        {
+            "type": "Microsoft.Logic/workflows",
+            "apiVersion": "2017-07-01",
+            "name": "[parameters('workflow_name_snapshot')]",
+            "location": "[parameters('workflow_location')]",
+            "identity": {
+                "type": "SystemAssigned"
+            },
+            "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', variables('office365_api_name'))]"
+            ],
+            "properties": {
+                "state": "Enabled",
+                "parameters": {
+                    "$connections": {
+                        "value": {
+                            "office365": {
+                                "connectionId": "[concat(resourceGroup().id,'/providers/Microsoft.Web/connections/',variables('office365_api_name'))]",
+                                "connectionName": "[variables('office365_api_name')]",
+                                "id": "[concat('/subscriptions/',subscription().subscriptionId,'/providers/Microsoft.Web/locations/' ,parameters('workflow_location'),'/managedApis/office365')]"
+                            }
+                        }
+                    }
+                },
+                "definition": {
+                    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                    "actions": {
+                        "Array_of_Snapshot_Ids": {
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "snapshots",
+                                        "type": "array"
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "Expiry_Date_Frame": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "InitializeVariable"
+                        },
+                        "Check_Array_of_Snapshots_is_greater_than_0": {
+                            "actions": {
+                                "Condition_approval": {
+                                    "actions": {
+                                        "For_each": {
+                                            "actions": {
+                                                "Delete_Old_Snapshot": {
+                                                    "inputs": {
+                                                        "authentication": {
+                                                            "audience": "https://management.azure.com",
+                                                            "type": "ManagedServiceIdentity"
+                                                        },
+                                                        "method": "DELETE",
+                                                        "queries": {
+                                                            "api-version": "2020-06-30"
+                                                        },
+                                                        "uri": "https://management.azure.com/@{body('Parse_JSON')['id']}"
+                                                    },
+                                                    "runAfter": {
+                                                        "Parse_JSON": [
+                                                            "Succeeded"
+                                                        ]
+                                                    },
+                                                    "type": "Http"
+                                                },
+                                                "Parse_JSON": {
+                                                    "inputs": {
+                                                        "content": "@items('For_each')",
+                                                        "schema": {
+                                                            "properties": {
+                                                                "id": {
+                                                                    "type": "string"
+                                                                },
+                                                                "location": {
+                                                                    "type": "string"
+                                                                },
+                                                                "name": {
+                                                                    "type": "string"
+                                                                },
+                                                                "properties": {
+                                                                    "properties": {
+                                                                        "creationData": {
+                                                                            "properties": {
+                                                                                "createOption": {
+                                                                                    "type": "string"
+                                                                                },
+                                                                                "sourceResourceId": {
+                                                                                    "type": "string"
+                                                                                },
+                                                                                "sourceUniqueId": {
+                                                                                    "type": "string"
+                                                                                }
+                                                                            },
+                                                                            "type": "object"
+                                                                        },
+                                                                        "diskSizeBytes": {
+                                                                            "type": "integer"
+                                                                        },
+                                                                        "diskSizeGB": {
+                                                                            "type": "integer"
+                                                                        },
+                                                                        "diskState": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "encryption": {
+                                                                            "properties": {
+                                                                                "type": {
+                                                                                    "type": "string"
+                                                                                }
+                                                                            },
+                                                                            "type": "object"
+                                                                        },
+                                                                        "hyperVGeneration": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "incremental": {
+                                                                            "type": "boolean"
+                                                                        },
+                                                                        "networkAccessPolicy": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "osType": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "provisioningState": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "timeCreated": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "uniqueId": {
+                                                                            "type": "string"
+                                                                        }
+                                                                    },
+                                                                    "type": "object"
+                                                                },
+                                                                "sku": {
+                                                                    "properties": {
+                                                                        "name": {
+                                                                            "type": "string"
+                                                                        },
+                                                                        "tier": {
+                                                                            "type": "string"
+                                                                        }
+                                                                    },
+                                                                    "type": "object"
+                                                                },
+                                                                "tags": {
+                                                                    "type": "object"
+                                                                },
+                                                                "type": {
+                                                                    "type": "string"
+                                                                }
+                                                            },
+                                                            "required": [
+                                                                "name",
+                                                                "id",
+                                                                "type",
+                                                                "location",
+                                                                "sku",
+                                                                "properties"
+                                                            ],
+                                                            "type": "object"
+                                                        }
+                                                    },
+                                                    "runAfter": {},
+                                                    "type": "ParseJson"
+                                                }
+                                            },
+                                            "foreach": "@variables('snapshots')",
+                                            "runAfter": {},
+                                            "type": "Foreach"
+                                        }
+                                    },
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "equals": [
+                                                    "@body('Send_approval_email')?['SelectedOption']",
+                                                    "Approve"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "runAfter": {
+                                        "Send_approval_email": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "If"
+                                },
+                                "Create_HTML_table": {
+                                    "inputs": {
+                                        "columns": [
+                                            {
+                                                "header": "Name",
+                                                "value": "@item()?['name']"
+                                            },
+                                            {
+                                                "header": "DiskGB",
+                                                "value": "@item()?['properties']?['diskSizeGB']"
+                                            },
+                                            {
+                                                "header": "Created",
+                                                "value": "@item()?['properties']?['timeCreated']"
+                                            },
+                                            {
+                                                "header": "Location",
+                                                "value": "@item()?['location']"
+                                            },
+                                            {
+                                                "header": "Tags",
+                                                "value": "@item()?['tags']"
+                                            }
+                                        ],
+                                        "format": "HTML",
+                                        "from": "@variables('snapshots')"
+                                    },
+                                    "runAfter": {},
+                                    "type": "Table"
+                                },
+                                "Send_approval_email": {
+                                    "inputs": {
+                                        "body": {
+                                            "Message": {
+                                                "Body": "@body('Create_HTML_table')",
+                                                "HeaderText": "Delete Zombie Snapshots Request",
+                                                "HideHTMLMessage": false,
+                                                "Importance": "High",
+                                                "Options": "Approve, Reject",
+                                                "SelectionText": "Please review the list of zombie snapshots and either Approve or Reject their deletion.",
+                                                "ShowHTMLConfirmationDialog": false,
+                                                "Subject": "Approval Request",
+                                                "To": "[parameters('workflow_approval_email')]",
+                                                "UseOnlyHTMLMessage": true
+                                            },
+                                            "NotificationUrl": "@{listCallbackUrl()}"
+                                        },
+                                        "host": {
+                                            "connection": {
+                                                "name": "@parameters('$connections')['office365']['connectionId']"
+                                            }
+                                        },
+                                        "path": "/approvalmail/$subscriptions"
+                                    },
+                                    "runAfter": {
+                                        "Create_HTML_table": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ApiConnectionWebhook"
+                                }
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "greater": [
+                                            "@length(variables('snapshots'))",
+                                            0
+                                        ]
+                                    }
+                                ]
+                            },
+                            "runAfter": {
+                                "For_each_Subscription": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "If"
+                        },
+                        "Expiry_Date_Frame": {
+                            "inputs": {
+                                "variables": [
+                                    {
+                                        "name": "Expiry Time Frame - Months",
+                                        "type": "integer",
+                                        "value": 18
+                                    }
+                                ]
+                            },
+                            "runAfter": {},
+                            "type": "InitializeVariable"
+                        },
+                        "For_each_Subscription": {
+                            "actions": {
+                                "For_each_Old_Snapshot": {
+                                    "actions": {
+                                        "Condition_is_Old": {
+                                            "actions": {
+                                                "Append_to_array_variable": {
+                                                    "inputs": {
+                                                        "name": "snapshots",
+                                                        "value": "@items('For_each_Old_Snapshot')"
+                                                    },
+                                                    "runAfter": {},
+                                                    "type": "AppendToArrayVariable"
+                                                }
+                                            },
+                                            "expression": {
+                                                "and": [
+                                                    {
+                                                        "less": [
+                                                            "@ticks(items('For_each_Old_Snapshot')?['properties']?['timeCreated'])",
+                                                            "@ticks(subtractFromTime(utcNow(), variables('Expiry Time Frame - Months'), 'Month'))"
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            "runAfter": {},
+                                            "type": "If"
+                                        }
+                                    },
+                                    "foreach": "@body('Parse_Snapshot_JSON')?['value']",
+                                    "runAfter": {
+                                        "Parse_Snapshot_JSON": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Foreach"
+                                },
+                                "Get_Old_Snapshot": {
+                                    "inputs": {
+                                        "authentication": {
+                                            "audience": "https://management.azure.com",
+                                            "type": "ManagedServiceIdentity"
+                                        },
+                                        "method": "GET",
+                                        "queries": {
+                                            "api-version": "2020-06-30"
+                                        },
+                                        "uri": "https://management.azure.com/subscriptions/@{items('For_each_Subscription')?['subscriptionId']}/providers/Microsoft.Compute/snapshots"
+                                    },
+                                    "runAfter": {},
+                                    "type": "Http"
+                                },
+                                "Parse_Snapshot_JSON": {
+                                    "inputs": {
+                                        "content": "@body('Get_Old_Snapshot')",
+                                        "schema": {
+                                            "properties": {
+                                                "value": {
+                                                    "items": {
+                                                        "properties": {
+                                                            "id": {
+                                                                "type": "string"
+                                                            },
+                                                            "location": {
+                                                                "type": "string"
+                                                            },
+                                                            "name": {
+                                                                "type": "string"
+                                                            },
+                                                            "properties": {
+                                                                "properties": {
+                                                                    "creationData": {
+                                                                        "properties": {
+                                                                            "createOption": {
+                                                                                "type": "string"
+                                                                            },
+                                                                            "sourceResourceId": {
+                                                                                "type": "string"
+                                                                            },
+                                                                            "sourceUniqueId": {
+                                                                                "type": "string"
+                                                                            }
+                                                                        },
+                                                                        "type": "object"
+                                                                    },
+                                                                    "diskSizeBytes": {
+                                                                        "type": "integer"
+                                                                    },
+                                                                    "diskSizeGB": {
+                                                                        "type": "integer"
+                                                                    },
+                                                                    "diskState": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "encryption": {
+                                                                        "properties": {
+                                                                            "type": {
+                                                                                "type": "string"
+                                                                            }
+                                                                        },
+                                                                        "type": "object"
+                                                                    },
+                                                                    "hyperVGeneration": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "incremental": {
+                                                                        "type": "boolean"
+                                                                    },
+                                                                    "networkAccessPolicy": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "osType": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "provisioningState": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "timeCreated": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "uniqueId": {
+                                                                        "type": "string"
+                                                                    }
+                                                                },
+                                                                "type": "object"
+                                                            },
+                                                            "sku": {
+                                                                "properties": {
+                                                                    "name": {
+                                                                        "type": "string"
+                                                                    },
+                                                                    "tier": {
+                                                                        "type": "string"
+                                                                    }
+                                                                },
+                                                                "type": "object"
+                                                            },
+                                                            "tags": {
+                                                                "type": "object"
+                                                            },
+                                                            "type": {
+                                                                "type": "string"
+                                                            }
+                                                        },
+                                                        "required": [
+                                                            "name",
+                                                            "id",
+                                                            "type",
+                                                            "location",
+                                                            "sku",
+                                                            "properties"
+                                                        ],
+                                                        "type": "object"
+                                                    },
+                                                    "type": "array"
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Get_Old_Snapshot": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "ParseJson"
+                                }
+                            },
+                            "foreach": "@body('Parse_Subscription_JSON')?['value']",
+                            "runAfter": {
+                                "Parse_Subscription_JSON": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Foreach"
+                        },
+                        "Get_Subscriptions": {
+                            "inputs": {
+                                "authentication": {
+                                    "audience": "https://management.azure.com",
+                                    "type": "ManagedServiceIdentity"
+                                },
+                                "method": "GET",
+                                "queries": {
+                                    "api-version": "2020-01-01"
+                                },
+                                "uri": "https://management.azure.com/subscriptions"
+                            },
+                            "runAfter": {
+                                "Array_of_Snapshot_Ids": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Http"
+                        },
+                        "Parse_Subscription_JSON": {
+                            "inputs": {
+                                "content": "@body('Get_Subscriptions')",
+                                "schema": {
+                                    "properties": {
+                                        "count": {
+                                            "properties": {
+                                                "type": {
+                                                    "type": "string"
+                                                },
+                                                "value": {
+                                                    "type": "integer"
+                                                }
+                                            },
+                                            "type": "object"
+                                        },
+                                        "value": {
+                                            "items": {
+                                                "properties": {
+                                                    "authorizationSource": {
+                                                        "type": "string"
+                                                    },
+                                                    "displayName": {
+                                                        "type": "string"
+                                                    },
+                                                    "id": {
+                                                        "type": "string"
+                                                    },
+                                                    "managedByTenants": {
+                                                        "type": "array"
+                                                    },
+                                                    "state": {
+                                                        "type": "string"
+                                                    },
+                                                    "subscriptionId": {
+                                                        "type": "string"
+                                                    },
+                                                    "subscriptionPolicies": {
+                                                        "properties": {
+                                                            "locationPlacementId": {
+                                                                "type": "string"
+                                                            },
+                                                            "quotaId": {
+                                                                "type": "string"
+                                                            },
+                                                            "spendingLimit": {
+                                                                "type": "string"
+                                                            }
+                                                        },
+                                                        "type": "object"
+                                                    },
+                                                    "tenantId": {
+                                                        "type": "string"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "id",
+                                                    "authorizationSource",
+                                                    "managedByTenants",
+                                                    "subscriptionId",
+                                                    "tenantId",
+                                                    "displayName",
+                                                    "state",
+                                                    "subscriptionPolicies"
+                                                ],
+                                                "type": "object"
+                                            },
+                                            "type": "array"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            },
+                            "runAfter": {
+                                "Get_Subscriptions": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ParseJson"
+                        }
+                    },
+                    "contentVersion": "1.0.0.0",
+                    "outputs": {},
+                    "parameters": {
+                        "$connections": {
+                            "defaultValue": {},
+                            "type": "Object"
+                        }
+                    },
+                    "triggers": {
+                        "Recurrence": {
+                            "recurrence": {
+                                "frequency": "Month",
+                                "interval": 1,
+                                "startTime": "[variables('recurrence_starttime')]",
+                                "timeZone": "UTC"
+                            },
+                            "type": "Recurrence"
+                        }
+                    }
+                }
+            },
+            "tags": {
+                "Application": "Zombie Snapshot Management Automation",
+                "Criticality": "[parameters('tags_criticality')]",
+                "Owner": "[parameters('tags_owner')]",
+                "deployedBy": "ARM"
+            }
+        }
+    ]
+}
