@@ -1,0 +1,1 @@
+# ans-management-automation-azure
