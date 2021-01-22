@@ -41,6 +41,6 @@ This [ARM (Azure Resource Manager)](https://docs.microsoft.com/en-us/azure/azure
 
 1. Navigate to your root management group (or each subscription manually)
 2. Assign `Contributor` rights to the logicapp's [managed identity](https://docs.microsoft.com/en-us/azure/active-directory/managed-identities-azure-resources/howto-assign-access-portal)
-3. Navigate to **API Connection** resource called Office365Connection
+3. Navigate to **API Connection** resource called Office365connection
 4. Within the **API Connection** blade, select **Edit API Connection** from the menu
 5. Click on the **Authorize** button and login with the Office365 account you want to send approval emails from. *Please note one authorised this connection can be used by anyone with access the Azure Portal and can be used to read and send emails so consider using a service user.*
